@@ -284,9 +284,10 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
+    let uri = format!("file:{}?immutable=1", cli.db_path.display());
     let conn = Connection::open_with_flags(
-        &cli.db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )?;
 
     let books = query_books(&conn)?;
