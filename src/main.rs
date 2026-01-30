@@ -26,8 +26,8 @@ struct TocEntry {
     title: String,
     /// ContentID with the trailing "-N" suffix stripped, used for matching bookmarks.
     match_id: String,
-    /// true = chapter heading (##), false = sub-section (###)
-    is_chapter: bool,
+    /// TOC depth level extracted from the trailing "-N" suffix (1 = top, 2 = part, 3 = section, etc.)
+    depth: u32,
 }
 
 struct Highlight {
@@ -71,20 +71,21 @@ fn strip_suffix(content_id: &str) -> String {
     content_id.to_string()
 }
 
-/// Extract the base xhtml file path from a ContentID.
-/// Finds the ".xhtml" (or ".html") extension and returns everything up to it (inclusive).
-fn extract_base_file(content_id: &str) -> String {
-    for ext in [".xhtml", ".html", ".xml"] {
-        if let Some(pos) = content_id.find(ext) {
-            return content_id[..pos + ext.len()].to_string();
+/// Extract the depth level from the trailing "-N" suffix of a ContentID.
+/// E.g. "...xhtml#chapter01_4-2" → 2, "...Cover.xhtml-1" → 1
+/// Returns 1 if no suffix is found (treat as top-level).
+fn extract_depth(content_id: &str) -> u32 {
+    if let Some(pos) = content_id.rfind('-') {
+        let after = &content_id[pos + 1..];
+        if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
+            return after.parse().unwrap_or(1);
         }
     }
-    content_id.to_string()
+    1
 }
 
 /// Fetch only ContentType=899 entries (the real TOC) ordered by VolumeIndex.
-/// Determines hierarchy: first entry for each base xhtml file is a chapter heading,
-/// subsequent entries for the same file are sub-sections.
+/// The trailing "-N" suffix on the ContentID encodes the TOC depth level.
 fn query_toc(conn: &Connection, book_content_id: &str) -> SqlResult<Vec<TocEntry>> {
     let mut stmt = conn.prepare(
         "SELECT ContentID, Title
@@ -94,25 +95,21 @@ fn query_toc(conn: &Connection, book_content_id: &str) -> SqlResult<Vec<TocEntry
          ORDER BY VolumeIndex",
     )?;
 
-    let raw: Vec<(String, String)> = stmt
+    let entries: Vec<TocEntry> = stmt
         .query_map([book_content_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            let content_id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            Ok((content_id, title))
         })?
-        .collect::<SqlResult<Vec<_>>>()?;
-
-    // First pass: determine which entries are the first for their base file (= chapter headings)
-    let mut seen_files: HashMap<String, bool> = HashMap::new();
-    let entries: Vec<TocEntry> = raw
+        .collect::<SqlResult<Vec<_>>>()?
         .into_iter()
         .map(|(content_id, title)| {
             let match_id = strip_suffix(&content_id);
-            let base_file = extract_base_file(&content_id);
-            let is_chapter = !seen_files.contains_key(&base_file);
-            seen_files.insert(base_file.clone(), true);
+            let depth = extract_depth(&content_id);
             TocEntry {
                 title,
                 match_id,
-                is_chapter,
+                depth,
             }
         })
         .collect();
@@ -219,19 +216,23 @@ fn generate_markdown(book: &Book, toc: &[TocEntry], highlights: &[Highlight]) ->
 
     let (assigned, uncategorized) = assign_highlights(toc, highlights);
 
-    // Determine which chapter headings need to be emitted: any chapter heading
-    // that itself has highlights, or whose subsequent sub-sections have highlights.
-    let mut chapter_needed: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    {
-        let mut current_chapter_idx: Option<usize> = None;
-        for (i, entry) in toc.iter().enumerate() {
-            if entry.is_chapter {
-                current_chapter_idx = Some(i);
-            }
-            if assigned.contains_key(&i) {
-                // This entry has highlights — ensure its parent chapter heading is emitted
-                if let Some(ch_idx) = current_chapter_idx {
-                    chapter_needed.insert(ch_idx);
+    // Determine which ancestor headings need to be emitted.
+    // For each TOC entry with highlights, mark all ancestor entries (entries at
+    // shallower depth that precede it) as needed.
+    let mut heading_needed: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for (i, _entry) in toc.iter().enumerate() {
+        if assigned.contains_key(&i) {
+            heading_needed.insert(i);
+            // Walk backwards to find and mark all ancestor headings
+            let current_depth = toc[i].depth;
+            let mut need_depth = current_depth;
+            for j in (0..i).rev() {
+                if toc[j].depth < need_depth {
+                    heading_needed.insert(j);
+                    need_depth = toc[j].depth;
+                    if need_depth <= 1 {
+                        break;
+                    }
                 }
             }
         }
@@ -239,28 +240,19 @@ fn generate_markdown(book: &Book, toc: &[TocEntry], highlights: &[Highlight]) ->
 
     // Walk TOC in VolumeIndex order
     for (i, entry) in toc.iter().enumerate() {
-        if entry.is_chapter {
-            // Emit chapter heading if it or any of its sub-sections have highlights
-            if chapter_needed.contains(&i) && !entry.title.is_empty() {
-                md.push_str(&format!("## {}\n\n", entry.title));
-            }
-            // Also emit any highlights directly on this chapter heading
-            if let Some(hl) = assigned.get(&i) {
-                for h in hl {
-                    md.push_str(&format_highlight(h));
-                    md.push('\n');
-                }
-            }
-        } else {
-            // Sub-section: only emit if it has highlights
-            if let Some(hl) = assigned.get(&i) {
-                if !entry.title.is_empty() {
-                    md.push_str(&format!("### {}\n\n", entry.title));
-                }
-                for h in hl {
-                    md.push_str(&format_highlight(h));
-                    md.push('\n');
-                }
+        if !heading_needed.contains(&i) || entry.title.is_empty() {
+            continue;
+        }
+
+        // depth 1 → ## (2 hashes), depth 2 → ### (3 hashes), etc.
+        // # is reserved for the book title, so heading level = depth + 1
+        let hashes = "#".repeat((entry.depth + 1) as usize);
+        md.push_str(&format!("{hashes} {}\n\n", entry.title));
+
+        if let Some(hl) = assigned.get(&i) {
+            for h in hl {
+                md.push_str(&format_highlight(h));
+                md.push('\n');
             }
         }
     }
@@ -368,38 +360,31 @@ mod tests {
         assert_eq!(strip_suffix(""), "");
     }
 
-    // --- extract_base_file ---
+    // --- extract_depth ---
 
     #[test]
-    fn extract_base_file_xhtml_with_fragment() {
-        assert_eq!(
-            extract_base_file("book.epub!OPS!xhtml/Chapter01.xhtml#chapter01-1"),
-            "book.epub!OPS!xhtml/Chapter01.xhtml"
-        );
+    fn extract_depth_single_digit() {
+        assert_eq!(extract_depth("book.epub!xhtml/Cover.xhtml-1"), 1);
     }
 
     #[test]
-    fn extract_base_file_xhtml_with_suffix() {
-        assert_eq!(
-            extract_base_file("book.epub!OPS!xhtml/Cover.xhtml-1"),
-            "book.epub!OPS!xhtml/Cover.xhtml"
-        );
+    fn extract_depth_multi_digit() {
+        assert_eq!(extract_depth("book.epub!xhtml/Chapter01.xhtml#ch01_4-2"), 2);
     }
 
     #[test]
-    fn extract_base_file_html() {
-        assert_eq!(
-            extract_base_file("book.epub!content/ch1.html#sec2"),
-            "book.epub!content/ch1.html"
-        );
+    fn extract_depth_deep_level() {
+        assert_eq!(extract_depth("book.epub!Text/wahl.html#sigil_toc_id_6-4"), 4);
     }
 
     #[test]
-    fn extract_base_file_no_extension_returns_full() {
-        assert_eq!(
-            extract_base_file("some/random/path"),
-            "some/random/path"
-        );
+    fn extract_depth_no_suffix_defaults_to_1() {
+        assert_eq!(extract_depth("book.epub!xhtml/Chapter01.xhtml#ch01_4"), 1);
+    }
+
+    #[test]
+    fn extract_depth_dash_not_digits() {
+        assert_eq!(extract_depth("some-path/file.xhtml#section-abc"), 1);
     }
 
     // --- sanitize_filename ---
@@ -481,13 +466,13 @@ mod tests {
 
     // --- assign_highlights ---
 
-    fn make_toc(entries: &[(&str, &str, bool)]) -> Vec<TocEntry> {
+    fn make_toc(entries: &[(&str, &str, u32)]) -> Vec<TocEntry> {
         entries
             .iter()
-            .map(|(title, match_id, is_chapter)| TocEntry {
+            .map(|(title, match_id, depth)| TocEntry {
                 title: title.to_string(),
                 match_id: match_id.to_string(),
-                is_chapter: *is_chapter,
+                depth: *depth,
             })
             .collect()
     }
@@ -504,8 +489,8 @@ mod tests {
     #[test]
     fn assign_highlights_exact_match() {
         let toc = make_toc(&[
-            ("Chapter I", "book!ch01.xhtml#ch01", true),
-            ("Section 1", "book!ch01.xhtml#ch01_1", false),
+            ("Chapter I", "book!ch01.xhtml#ch01", 1),
+            ("Section 1", "book!ch01.xhtml#ch01_1", 2),
         ]);
         let highlights = vec![make_highlight("hello", "book!ch01.xhtml#ch01_1")];
 
@@ -516,7 +501,7 @@ mod tests {
 
     #[test]
     fn assign_highlights_unmatched_goes_to_uncategorized() {
-        let toc = make_toc(&[("Chapter I", "book!ch01.xhtml#ch01", true)]);
+        let toc = make_toc(&[("Chapter I", "book!ch01.xhtml#ch01", 1)]);
         let highlights = vec![make_highlight("hello", "book!ch99.xhtml#unknown")];
 
         let (assigned, uncategorized) = assign_highlights(&toc, &highlights);
@@ -526,7 +511,7 @@ mod tests {
 
     #[test]
     fn assign_highlights_multiple_to_same_section() {
-        let toc = make_toc(&[("Section", "book!ch01.xhtml#sec1", false)]);
+        let toc = make_toc(&[("Section", "book!ch01.xhtml#sec1", 3)]);
         let highlights = vec![
             make_highlight("first", "book!ch01.xhtml#sec1"),
             make_highlight("second", "book!ch01.xhtml#sec1"),
@@ -546,8 +531,8 @@ mod tests {
             author: Some("Author Name".into()),
         };
         let toc = make_toc(&[
-            ("Chapter I", "book!ch01.xhtml#ch01", true),
-            ("Section 1", "book!ch01.xhtml#sec1", false),
+            ("Chapter I", "book!ch01.xhtml#ch01", 1),
+            ("Section 1", "book!ch01.xhtml#sec1", 2),
         ]);
         let highlights = vec![make_highlight("Important text", "book!ch01.xhtml#sec1")];
 
@@ -562,10 +547,10 @@ mod tests {
     #[test]
     fn generate_markdown_parent_chapter_emitted_for_subsection_highlights() {
         let toc = make_toc(&[
-            ("KAPITEL I", "book!ch01.xhtml#ch01", true),
-            ("1. Abschnitt", "book!ch01.xhtml#ch01_1", false),
-            ("KAPITEL II", "book!ch02.xhtml#ch02", true),
-            ("1. Abschnitt", "book!ch02.xhtml#ch02_1", false),
+            ("KAPITEL I", "book!ch01.xhtml#ch01", 1),
+            ("1. Abschnitt", "book!ch01.xhtml#ch01_1", 2),
+            ("KAPITEL II", "book!ch02.xhtml#ch02", 1),
+            ("1. Abschnitt", "book!ch02.xhtml#ch02_1", 2),
         ]);
         let book = Book {
             content_id: "b".into(),
@@ -584,13 +569,65 @@ mod tests {
     }
 
     #[test]
+    fn generate_markdown_multi_level_hierarchy() {
+        let toc = make_toc(&[
+            ("The Enchanted Forest", "book!forest.html#id_1", 1),
+            ("I. The Crystal Cave", "book!forest.html#id_2", 2),
+            ("1. The Hidden Door", "book!forest.html#id_3", 3),
+            ("a) The Silver Key", "book!forest.html#id_4", 4),
+            ("II. The Mountain Pass", "book!forest.html#id_5", 2),
+        ]);
+        let book = Book {
+            content_id: "b".into(),
+            title: "T".into(),
+            author: None,
+        };
+        let highlights = vec![make_highlight("deep text", "book!forest.html#id_4")];
+
+        let md = generate_markdown(&book, &toc, &highlights);
+        // All ancestors should be emitted (depth+1 = heading level)
+        assert!(md.contains("## The Enchanted Forest\n"));
+        assert!(md.contains("### I. The Crystal Cave\n"));
+        assert!(md.contains("#### 1. The Hidden Door\n"));
+        assert!(md.contains("##### a) The Silver Key\n"));
+        // Section II should NOT appear (no highlights)
+        assert!(!md.contains("II. The Mountain Pass"));
+    }
+
+    #[test]
+    fn generate_markdown_separate_files_hierarchy() {
+        // Each entry in its own file, depth from suffix
+        let toc = make_toc(&[
+            ("Part One: The Dawn", "book!_1h_1.xhtml", 2),
+            ("1. The Awakening", "book!_1h_2.xhtml", 3),
+            ("2. The First Light", "book!_1h_3.xhtml", 3),
+            ("Part Two: The Dusk", "book!_1h_7.xhtml", 2),
+            ("1. The Fading Star", "book!_1h_8.xhtml", 3),
+        ]);
+        let book = Book {
+            content_id: "b".into(),
+            title: "T".into(),
+            author: None,
+        };
+        let highlights = vec![make_highlight("text", "book!_1h_2.xhtml")];
+
+        let md = generate_markdown(&book, &toc, &highlights);
+        assert!(md.contains("### Part One: The Dawn\n"));
+        assert!(md.contains("#### 1. The Awakening\n"));
+        // Part Two should NOT appear
+        assert!(!md.contains("Part Two: The Dusk"));
+        // Other sections without highlights should not appear
+        assert!(!md.contains("2. The First Light"));
+    }
+
+    #[test]
     fn generate_markdown_uncategorized_section() {
         let book = Book {
             content_id: "b".into(),
             title: "T".into(),
             author: None,
         };
-        let toc = make_toc(&[("Ch", "book!ch01.xhtml#ch01", true)]);
+        let toc = make_toc(&[("Ch", "book!ch01.xhtml#ch01", 1)]);
         let highlights = vec![make_highlight("orphan", "book!unknown.xhtml#x")];
 
         let md = generate_markdown(&book, &toc, &highlights);
@@ -605,7 +642,7 @@ mod tests {
             title: "T".into(),
             author: None,
         };
-        let toc = make_toc(&[("Ch", "book!ch01.xhtml#ch01", true)]);
+        let toc = make_toc(&[("Ch", "book!ch01.xhtml#ch01", 1)]);
         let highlights = vec![make_highlight("matched", "book!ch01.xhtml#ch01")];
 
         let md = generate_markdown(&book, &toc, &highlights);
@@ -619,7 +656,7 @@ mod tests {
             title: "T".into(),
             author: None,
         };
-        let toc = make_toc(&[("Ch", "id", true)]);
+        let toc = make_toc(&[("Ch", "id", 1)]);
         let highlights = vec![Highlight {
             text: "highlighted".into(),
             annotation: Some("my note".into()),
@@ -707,17 +744,17 @@ mod tests {
             [],
         )
         .unwrap();
-        // Chapter heading (type 899)
+        // Chapter heading (type 899, depth 2 = part level)
         conn.execute(
             "INSERT INTO content (ContentID, ContentType, BookID, Title, VolumeIndex)
-             VALUES ('book!Chapter01.xhtml#ch01-1', '899', 'book1', 'I. KAPITEL', 0)",
+             VALUES ('book!Chapter01.xhtml#ch01-2', '899', 'book1', 'I. KAPITEL', 0)",
             [],
         )
         .unwrap();
-        // Sub-section (type 899, same base file)
+        // Sub-section (type 899, depth 3 = section level)
         conn.execute(
             "INSERT INTO content (ContentID, ContentType, BookID, Title, VolumeIndex)
-             VALUES ('book!Chapter01.xhtml#ch01_1-2', '899', 'book1', '1. Section', 1)",
+             VALUES ('book!Chapter01.xhtml#ch01_1-3', '899', 'book1', '1. Section', 1)",
             [],
         )
         .unwrap();
@@ -726,11 +763,11 @@ mod tests {
         assert_eq!(toc.len(), 2);
 
         assert_eq!(toc[0].title, "I. KAPITEL");
-        assert!(toc[0].is_chapter);
+        assert_eq!(toc[0].depth, 2);
         assert_eq!(toc[0].match_id, "book!Chapter01.xhtml#ch01");
 
         assert_eq!(toc[1].title, "1. Section");
-        assert!(!toc[1].is_chapter);
+        assert_eq!(toc[1].depth, 3);
         assert_eq!(toc[1].match_id, "book!Chapter01.xhtml#ch01_1");
     }
 
