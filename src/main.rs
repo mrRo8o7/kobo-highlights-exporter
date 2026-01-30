@@ -12,7 +12,7 @@ struct Cli {
     db_path: PathBuf,
 
     /// Output directory for Markdown files
-    #[arg(short, long, default_value = "output")]
+    #[arg(short, long, default_value = "highlights")]
     output_dir: PathBuf,
 }
 

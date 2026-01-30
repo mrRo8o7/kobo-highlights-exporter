@@ -36,7 +36,7 @@ Run the exporter, pointing it at the database file:
 kobo-highlights-exporter /path/to/KoboReader.sqlite
 ```
 
-By default, Markdown files are written to an `output/` directory. You can specify a different output directory with the `-o` flag:
+By default, Markdown files are written to a `highlights/` directory. You can specify a different output directory with the `-o` flag:
 
 ```sh
 kobo-highlights-exporter /path/to/KoboReader.sqlite -o ~/my-highlights
