@@ -10,7 +10,7 @@ echo @="Run Kobo Highlights Exporter" >> "%TEMP%\kobo-highlights-menu.reg"
 echo "Icon"="%USERPROFILE%\\kobo-highlights-exporter\\kobo-highlights-icon.ico" >> "%TEMP%\kobo-highlights-menu.reg"
 echo. >> "%TEMP%\kobo-highlights-menu.reg"
 echo [HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.sqlite\shell\RunKoboHighlights\command] >> "%TEMP%\kobo-highlights-menu.reg"
-echo @="\"%USERPROFILE%\\kobo-highlights-exporter\\target\\release\\kobo-highlights-exporter.exe\" \"%%1\"" >> "%TEMP%\kobo-highlights-menu.reg"
+echo @="\"%USERPROFILE%\\kobo-highlights-exporter\\kobo-highlights-exporter.exe\" \"%%1\"" >> "%TEMP%\kobo-highlights-menu.reg"
 
 
 :: Import the registry file
