@@ -52,12 +52,16 @@ jobs:
           7z a ../../../kobo-highlights-exporter-${{ matrix.target }}.zip kobo-highlights-exporter.exe
           cd ../../..
 
+      - name: Install NSIS
+        if: matrix.archive == 'zip'
+        run: choco install nsis -y
+
       - name: Build installer (Windows)
         if: matrix.archive == 'zip'
-        shell: bash
+        shell: cmd
         run: |
-          cp target/${{ matrix.target }}/release/kobo-highlights-exporter.exe .
-          makensis installer.nsi
+          copy target\${{ matrix.target }}\release\kobo-highlights-exporter.exe .
+          "%PROGRAMFILES(x86)%\NSIS\makensis.exe" installer.nsi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
