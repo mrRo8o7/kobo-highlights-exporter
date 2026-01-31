@@ -14,26 +14,27 @@ The generated Markdown files can be used with note-taking and knowledge manageme
 
 ## Installation
 
-### Download (recommended)
+### Windows (installer)
 
-Pre-built binaries are available on the [Releases](https://github.com/mrRo8o7/kobo-highlights-exporter/releases) page. Download the archive that matches your operating system:
+Download `kobo-highlights-exporter-installer.exe` from the [Releases](https://github.com/mrRo8o7/kobo-highlights-exporter/releases) page and run it. The installer will set up the tool and add a right-click menu entry for exporting highlights directly from File Explorer (see [Windows right-click menu](#windows-right-click-menu) below). To remove the tool later, use **"Add or Remove Programs"** in Windows Settings.
+
+### macOS / Linux
+
+Download the archive that matches your system from the [Releases](https://github.com/mrRo8o7/kobo-highlights-exporter/releases) page:
 
 | Operating system       | File to download                                              |
 |------------------------|---------------------------------------------------------------|
-| Windows                | `kobo-highlights-exporter-x86_64-pc-windows-msvc.zip`         |
 | macOS (Apple Silicon)  | `kobo-highlights-exporter-aarch64-apple-darwin.tar.gz`        |
 | macOS (Intel)          | `kobo-highlights-exporter-x86_64-apple-darwin.tar.gz`         |
 | Linux                  | `kobo-highlights-exporter-x86_64-unknown-linux-gnu.tar.gz`    |
 
-On **Windows**, extract the `.zip` file — you will find `kobo-highlights-exporter.exe` inside.
-
-On **macOS** or **Linux**, extract the archive by opening a terminal and running:
+Extract the archive by opening a terminal and running:
 
 ```sh
 tar xzf kobo-highlights-exporter-*.tar.gz
 ```
 
-You can move the extracted file to any folder you like. On macOS/Linux, placing it somewhere in your `PATH` (e.g. `/usr/local/bin`) lets you run it from any directory.
+You can move the extracted file to any folder you like. Placing it somewhere in your `PATH` (e.g. `/usr/local/bin`) lets you run it from any directory.
 
 ### Build from source
 
@@ -68,35 +69,14 @@ The compiled binary will be at `target/release/kobo-highlights-exporter` (or `.e
    kobo-highlights-exporter /path/to/KoboReader.sqlite -o ~/my-highlights
    ```
 
-## Windows right-click menu integration
+## Windows right-click menu
 
-On Windows you can add an entry to the right-click menu so you can export highlights directly from File Explorer — no terminal needed.
-
-### Setup
-
-1. Download the latest release `.zip` from the [Releases](https://github.com/mrRo8o7/kobo-highlights-exporter/releases) page and extract it.
-2. Open your user folder (press `Win + R`, type `%USERPROFILE%` and press Enter).
-3. Create a new folder called `kobo-highlights-exporter`.
-4. Copy the following files from this repository into that folder:
-   - `kobo-highlights-exporter.exe` (from the release `.zip`)
-   - `kobo-highlights-icon.ico`
-   - `install-kobo-context-menu.bat`
-5. Double-click `install-kobo-context-menu.bat` to install the right-click menu entry.
-
-### How to use
+If you installed using the Windows installer, a right-click menu entry is automatically set up. To use it:
 
 1. Connect your Kobo e-reader via USB.
 2. Open the Kobo drive in File Explorer and navigate to the `.kobo` folder (this is a hidden folder — you may need to enable "Show hidden files" in Explorer's **View** menu).
 3. Right-click on `KoboReader.sqlite` and select **"Run Kobo Highlights Exporter"**.
 4. Your highlights will be exported as Markdown files into a `highlights/` folder next to the database file.
-
-### Uninstall
-
-To remove the right-click menu entry:
-
-1. Press `Win + R`, type `regedit` and press Enter.
-2. Navigate to `HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.sqlite\shell\RunKoboHighlights`.
-3. Right-click the `RunKoboHighlights` key and select **Delete**.
 
 ## Output format
 

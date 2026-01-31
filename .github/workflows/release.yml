@@ -52,11 +52,20 @@ jobs:
           7z a ../../../kobo-highlights-exporter-${{ matrix.target }}.zip kobo-highlights-exporter.exe
           cd ../../..
 
+      - name: Build installer (Windows)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/kobo-highlights-exporter.exe .
+          makensis installer.nsi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: kobo-highlights-exporter-${{ matrix.target }}
-          path: kobo-highlights-exporter-${{ matrix.target }}.*
+          path: |
+            kobo-highlights-exporter-${{ matrix.target }}.*
+            kobo-highlights-exporter-installer.exe
 
   release:
     needs: build
@@ -74,3 +83,4 @@ jobs:
           files: |
             kobo-highlights-exporter-*.tar.gz
             kobo-highlights-exporter-*.zip
+            kobo-highlights-exporter-installer.exe
