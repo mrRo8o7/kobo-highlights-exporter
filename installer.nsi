@@ -2,7 +2,7 @@
 
 Name "Kobo Highlights Exporter"
 OutFile "kobo-highlights-exporter-installer.exe"
-InstallDir "$PROGRAMFILES\Kobo Highlights Exporter"
+InstallDir "$LOCALAPPDATA\Kobo Highlights Exporter"
 InstallDirRegKey HKCU "Software\Kobo Highlights Exporter" "InstallDir"
 RequestExecutionLevel user
 
